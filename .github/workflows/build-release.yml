@@ -81,7 +81,37 @@ jobs:
           test -f "app/src/main/AndroidManifest.xml" || { echo "Missing 'AndroidManifest.xml'! Build aborted." >&2; exit 1; }
           test -f "gradle/libs.versions.toml" || { echo "Missing 'libs.versions.toml'! Build aborted." >&2; exit 1; }
           test -f "settings.gradle.kts" || { echo "Missing 'settings.gradle.kts'! Build aborted." >&2; exit 1; }
-          echo "Project structure validated."
+          
+          # Fail-fast validation of Gradle Wrapper integrity
+          echo "[INFO] Validating Gradle wrapper integrity..."
+          if [ ! -s "./gradlew" ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL] ./gradlew is missing or empty! Build aborted." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          if [ ! -s "./gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL] Gradle wrapper JAR is missing or empty! Build aborted." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          if [ ! -f "./gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL] gradle-wrapper.properties is missing! Build aborted." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          
+          chmod +x ./gradlew
+          WRAPPER_VERSION=$(./gradlew --version | grep -E "Gradle [0-9]+\.[0-9]+" | head -n1 || echo "")
+          echo "[OK] Restored Gradle wrapper verified: $WRAPPER_VERSION"
+          if [[ "$WRAPPER_VERSION" != *"9.3.1"* ]]; then
+            echo "[FATAL] Expected Gradle 9.3.1 but found: $WRAPPER_VERSION" >&2
+            exit 1
+          fi
+          
+          echo "Project structure and Gradle wrapper validated."
 
       - name: 6. Extract & Validate Version Configuration
         id: version_check
