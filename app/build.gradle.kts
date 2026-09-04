@@ -79,6 +79,11 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  lint {
+    abortOnError = true
+    checkReleaseBuilds = true
+    disable.add("InvalidFragmentVersionForActivityResult")
+  }
 }
 
 tasks.matching { it.name.startsWith("validateSigningRelease") || it.name.startsWith("packageRelease") }.configureEach {
@@ -120,6 +125,7 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.androidx.biometric)
+  implementation(libs.androidx.fragment.ktx)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)

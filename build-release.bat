@@ -194,8 +194,8 @@ REM STEP 7: BUILD RELEASE APK
 REM ------------------------------------------------------------------------------
 echo [STEP 7/18] Building Release APK with Gradle Wrapper...
 
-echo [INFO] Executing: %GRADLE_CMD% assembleRelease --no-daemon
-call %GRADLE_CMD% assembleRelease --no-daemon
+echo [INFO] Executing: %GRADLE_CMD% :app:assembleRelease --no-daemon --no-configuration-cache
+call %GRADLE_CMD% :app:assembleRelease --no-daemon --no-configuration-cache
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Gradle release build failed with exit code %ERRORLEVEL%!
     goto :BUILD_FAILED

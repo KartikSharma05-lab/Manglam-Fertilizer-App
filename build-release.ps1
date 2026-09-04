@@ -209,9 +209,9 @@ Write-Host ""
 Write-Host "[STEP 7/18] Compiling Release APK with Gradle Wrapper..." -ForegroundColor Yellow
 
 $GradleExec = if (Test-Path ".\gradlew.bat") { ".\gradlew.bat" } else { "gradle" }
-Write-Host "  [INFO] Executing: $GradleExec assembleRelease" -ForegroundColor Gray
+Write-Host "  [INFO] Executing: $GradleExec :app:assembleRelease --no-daemon --no-configuration-cache" -ForegroundColor Gray
 
-& $GradleExec assembleRelease --no-daemon
+& $GradleExec :app:assembleRelease --no-daemon --no-configuration-cache
 if ($LASTEXITCODE -ne 0) {
     Write-Error "[FATAL] Gradle build failed with exit code $LASTEXITCODE! Stopping release."
     exit 1

@@ -197,7 +197,27 @@ jobs:
       - name: 9. Compile Release APK
         run: |
           echo "=== [STEP 5/14] Compiling Signed Production APK ==="
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace --no-configuration-cache
+          
+          # Immediate assertion that output directory and APK exist
+          if [ ! -d "app/build/outputs" ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL ERROR] Compilation completed but 'app/build/outputs' was not created!" >&2
+            echo "Gradle did not produce any output artifacts. Release aborted." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          
+          FOUND_COUNT=$(find app/build/outputs -type f -name "*.apk" 2>/dev/null | grep -v -i -E "debug|androidTest|test|unsigned|intermediates" | wc -l)
+          if [ "$FOUND_COUNT" -le 0 ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL ERROR] :app:assembleRelease finished without generating a release APK!" >&2
+            echo "Listing contents of app/build/outputs:" >&2
+            ls -laR app/build/outputs >&2 || true
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          echo "[OK] Production APK successfully compiled and detected."
 
       - name: 10. Locate, Verify & Package Release Artifacts
         id: package_artifacts

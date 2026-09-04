@@ -144,8 +144,8 @@ echo ""
 # ------------------------------------------------------------------------------
 echo "[STEP 7/18] Compiling Release APK with Gradle..."
 
-echo "[INFO] Executing: $GRADLE_CMD assembleRelease --no-daemon"
-$GRADLE_CMD assembleRelease --no-daemon
+echo "[INFO] Executing: $GRADLE_CMD :app:assembleRelease --no-daemon --no-configuration-cache"
+$GRADLE_CMD :app:assembleRelease --no-daemon --no-configuration-cache
 
 echo "[OK] Release APK assembled successfully."
 echo ""
