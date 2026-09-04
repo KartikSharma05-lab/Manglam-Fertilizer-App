@@ -197,9 +197,48 @@ jobs:
       - name: 9. Compile Release APK
         run: |
           echo "=== [STEP 5/14] Compiling Signed Production APK ==="
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace --no-configuration-cache
           
-          # Immediate assertion that output directory and APK exist
+          # Diagnostic: Pre-build check of environment and tasks
+          echo "[DIAGNOSTIC] Validating keystore path environment variable:"
+          echo "KEYSTORE_PATH is set: $(if [ -n "$KEYSTORE_PATH" ]; then echo 'YES'; else echo 'NO'; fi)"
+          if [ -n "$KEYSTORE_PATH" ]; then
+            echo "KEYSTORE_PATH file exists: $(if [ -f "$KEYSTORE_PATH" ]; then echo 'YES'; else echo 'NO'; fi)"
+            echo "KEYSTORE_PATH size bytes: $(stat -c%s "$KEYSTORE_PATH" 2>/dev/null || wc -c < "$KEYSTORE_PATH" 2>/dev/null || echo 'UNKNOWN')"
+          fi
+          
+          echo "[DIAGNOSTIC] Checking task graph with dry-run:"
+          ./gradlew :app:assembleRelease --dry-run --no-daemon --no-configuration-cache --console=plain || true
+          
+          echo "[INFO] Running: ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache --stacktrace --console=plain --info"
+          set +e
+          ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache --stacktrace --console=plain --info
+          GRADLE_EXIT=$?
+          set -e
+          
+          echo "Gradle exit code: $GRADLE_EXIT"
+          
+          echo "[DIAGNOSTIC] Inspecting project directories:"
+          echo "--- Root directory (ls -la) ---"
+          ls -la
+          echo "--- App directory (ls -la app) ---"
+          ls -la app
+          echo "--- App build directory (ls -la app/build) ---"
+          ls -la app/build || true
+          echo "--- App build outputs (ls -la app/build/outputs) ---"
+          ls -la app/build/outputs || true
+          echo "--- All APK files found in app/build ---"
+          find app/build -maxdepth 5 -type f -name "*.apk" -print 2>/dev/null || true
+          echo "--- All APK files found anywhere in workspace ---"
+          find . -maxdepth 6 -type f -name "*.apk" -print 2>/dev/null || true
+          
+          if [ $GRADLE_EXIT -ne 0 ]; then
+            echo "==============================================================================" >&2
+            echo "[FATAL ERROR] Gradle assembleRelease failed with non-zero exit code: $GRADLE_EXIT" >&2
+            echo "==============================================================================" >&2
+            exit $GRADLE_EXIT
+          fi
+          
+          # Assertion that output directory and APK exist
           if [ ! -d "app/build/outputs" ]; then
             echo "==============================================================================" >&2
             echo "[FATAL ERROR] Compilation completed but 'app/build/outputs' was not created!" >&2
