@@ -517,7 +517,7 @@ jobs:
           cd "$RUNNER_TEMP/verified_release"
           
           TAG="v${VERSION_NAME}"
-          gh release download "$TAG" --pattern "*" --dir .
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "*" --dir .
           
           test -f "$APK_NAME" || { echo "[AUDIT FAILED] Downloaded APK missing from release!" >&2; exit 1; }
           test -f "update.json" || { echo "[AUDIT FAILED] Downloaded update.json missing from release!" >&2; exit 1; }
