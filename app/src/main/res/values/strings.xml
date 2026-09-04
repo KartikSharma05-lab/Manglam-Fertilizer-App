@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">MANGALAM FERTILIZER</string>
+    <string name="app_subtitle">Inventory &amp; Billing</string>
+    
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_billing">Bills</string>
+    <string name="nav_inventory">Inventory</string>
+    <string name="nav_customers">Customers</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Quick Actions -->
+    <string name="action_billing">Billing</string>
+    <string name="action_inventory">Inventory</string>
+    <string name="action_customers">Customers</string>
+    <string name="action_barcode">Barcode</string>
+    <string name="action_ai_advisor">AI Advisor</string>
+    <string name="action_voice_ai">Voice AI</string>
+    <string name="action_reports">Reports</string>
+    <string name="action_alerts">Alerts</string>
+</resources>

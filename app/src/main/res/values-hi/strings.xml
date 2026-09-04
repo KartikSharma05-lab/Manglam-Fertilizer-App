@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">मंगलम फर्टिलाइजर</string>
+    <string name="app_subtitle">इन्वेंट्री एवं बिलिंग</string>
+    
+    <!-- Navigation -->
+    <string name="nav_home">होम</string>
+    <string name="nav_billing">बिल</string>
+    <string name="nav_inventory">स्टॉक</string>
+    <string name="nav_customers">ग्राहक</string>
+    <string name="nav_reports">रिपोर्ट्स</string>
+    <string name="nav_settings">सेटिंग्स</string>
+
+    <!-- Quick Actions -->
+    <string name="action_billing">बिलिंग</string>
+    <string name="action_inventory">स्टॉक</string>
+    <string name="action_customers">ग्राहक</string>
+    <string name="action_barcode">बारकोड</string>
+    <string name="action_ai_advisor">AI सलाहकार</string>
+    <string name="action_voice_ai">वॉइस AI</string>
+    <string name="action_reports">रिपोर्ट्स</string>
+    <string name="action_alerts">अलर्ट्स</string>
+</resources>

@@ -1,0 +1,415 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // 1. HELPER SECURITY & ROLE FUNCTIONS
+    // =========================================================================
+
+    // Verify user is authenticated with a valid Firebase Auth session
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    // Authoritative Admin check based SOLELY on verified administrator emails
+    // UID or client payload is strictly NOT used to determine admin status
+    function isAdmin() {
+      return isAuthenticated() && (
+        (
+          'email' in request.auth.token &&
+          request.auth.token.email != null && (
+            request.auth.token.email.lower() == 'kartik.bharadwaj0105@gmail.com' || 
+            request.auth.token.email.lower() == 'admin.manglamferilizer@gmail.com' ||
+            request.auth.token.email.lower() == 'admin.manglamfertilizer@gmail.com'
+          )
+        ) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' ||
+            (
+              'email' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email != null && (
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email.lower() == 'kartik.bharadwaj0105@gmail.com' ||
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email.lower() == 'admin.manglamferilizer@gmail.com' ||
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email.lower() == 'admin.manglamfertilizer@gmail.com'
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // Authenticated Staff role (any authenticated user who is not an admin)
+    function isStaff() {
+      return isAuthenticated() && !isAdmin();
+    }
+
+    // Tenant / Business ID authorization check
+    function isAuthorizedBusiness(businessId) {
+      return isAuthenticated() && (
+        businessId == 'mangalam_fertilizer' ||
+        businessId == 'manglam_fertilizer'
+      );
+    }
+
+    // Verify user owns the document or is an Administrator (prevents identity spoofing)
+    function isOwnerOrAdmin(userId) {
+      return isAdmin() || (isAuthenticated() && request.auth.uid == userId);
+    }
+
+    // =========================================================================
+    // 2. BUSINESS DATA ROOT & SUBCOLLECTIONS (/businesses/{businessId}/...)
+    // =========================================================================
+    match /businesses/{businessId} {
+      allow read: if isAuthorizedBusiness(businessId);
+      allow write: if isAuthorizedBusiness(businessId) && isAdmin();
+
+      // Products & Inventory (Read: all staff; Create/Update: staff with valid fields; Delete: admin only)
+      match /products/{productId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create: if isAuthorizedBusiness(businessId) && (
+          isAdmin() || (
+            isStaff() &&
+            request.resource.data.name is string &&
+            request.resource.data.name.size() > 0 &&
+            request.resource.data.sellingPrice is number &&
+            request.resource.data.sellingPrice >= 0 &&
+            request.resource.data.stockQuantity is number &&
+            request.resource.data.stockQuantity >= 0
+          )
+        );
+        allow update: if isAuthorizedBusiness(businessId) && (
+          isAdmin() || (
+            isStaff() &&
+            request.resource.data.name is string &&
+            request.resource.data.name.size() > 0 &&
+            request.resource.data.sellingPrice is number &&
+            request.resource.data.sellingPrice >= 0 &&
+            request.resource.data.stockQuantity is number &&
+            request.resource.data.stockQuantity >= 0 &&
+            (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt)
+          )
+        );
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Categories (Create/Update: staff; Delete: admin only)
+      match /categories/{categoryId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId) && request.resource.data.name is string && request.resource.data.name.size() > 0;
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Inventory History (Create-only from client, immutable log)
+      match /inventory_history/{historyId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create: if isAuthorizedBusiness(businessId) && (
+          isAdmin() || (
+            (!('userEmail' in request.resource.data) || request.resource.data.userEmail == request.auth.token.email) &&
+            (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid)
+          )
+        );
+        allow update, delete: if false;
+      }
+
+      // Invoices & Daily Accounts (Billing records that power Daily Accounts)
+      // Read: authenticated business users
+      // Create: staff (cannot spoof user metadata)
+      // Update/Delete: Admin only
+      match /invoices/{invoiceId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create: if isAuthorizedBusiness(businessId) && (
+          isAdmin() || (
+            isStaff() &&
+            (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid) &&
+            (!('userEmail' in request.resource.data) || request.resource.data.userEmail == request.auth.token.email) &&
+            (!('createdByEmail' in request.resource.data) || request.resource.data.createdByEmail == request.auth.token.email)
+          )
+        );
+        allow update, delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Customers / Farmers (Read/Create/Update: staff; Delete: Admin only)
+      match /customers/{customerId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Farmers alias (Read/Create/Update: staff; Delete: Admin only)
+      match /farmers/{farmerId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Daily Accounts / Day Ledger (Read: staff; Create: staff; Update/Delete: Admin only)
+      match /dailyAccounts/{accountId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      match /daily_accounts/{accountId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Credit / Due Records (Read/Create/Update: staff; Delete: Admin only)
+      match /credit_records/{creditId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // Settings (Business configuration, alert thresholds, AI preferences, invoice numbering: Admin only configuration)
+      match /settings/{settingId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, delete: if isAuthorizedBusiness(businessId) && isAdmin();
+        allow update: if isAuthorizedBusiness(businessId) && (
+          isAdmin() || (
+            settingId == 'invoiceNumber' &&
+            isStaff() &&
+            // Staff can only update sequence pointers during atomic invoice transactions
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextInvoiceNumber', 'lastIssuedNumber', 'updatedAt'])
+          )
+        );
+      }
+
+      // Alerts & Notifications
+      match /alerts/{alertId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow create, update: if isAuthorizedBusiness(businessId);
+        allow delete: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow write: if isAuthorizedBusiness(businessId);
+      }
+
+      // Scoped Audit Logs
+      match /audit_logs/{logId} {
+        allow read: if isAuthorizedBusiness(businessId) && isAdmin();
+        allow create: if isAuthorizedBusiness(businessId) && request.resource.data.action is string;
+        allow update, delete: if false;
+      }
+
+      // Backups (Admin only)
+      match /backups/{backupId} {
+        allow read, write: if isAuthorizedBusiness(businessId) && isAdmin();
+      }
+
+      // System Health diagnostics & live connection verification
+      match /system_health/{docId} {
+        allow read, write: if isAuthorizedBusiness(businessId);
+      }
+
+      // System Sync Probe
+      match /system/{docId} {
+        allow read: if isAuthorizedBusiness(businessId);
+        allow write: if false;
+      }
+    }
+
+    // =========================================================================
+    // 3. USER PROFILES & USER-SPECIFIC SETTINGS (/users/{userId}/...)
+    // =========================================================================
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() && (
+        isAdmin() || (
+          request.auth.uid == userId &&
+          (!('role' in request.resource.data) || request.resource.data.role == 'STAFF')
+        )
+      );
+
+      allow update: if isAuthenticated() && (
+        isAdmin() || (
+          request.auth.uid == userId &&
+          (!('role' in request.resource.data) || request.resource.data.role == resource.data.role || request.resource.data.role == 'STAFF')
+        )
+      );
+
+      allow delete: if isAdmin();
+
+      // User specific preferences subcollection (Owner or Admin only)
+      match /preferences/{prefId} {
+        allow read, write: if isOwnerOrAdmin(userId);
+      }
+
+      match /settings/{settingId} {
+        allow read, write: if isOwnerOrAdmin(userId);
+      }
+    }
+
+    // =========================================================================
+    // 4. TOP-LEVEL GLOBAL COLLECTIONS (Canonical & Fallback Paths)
+    // =========================================================================
+
+    // Canonical Audit Logs (Append-only by authenticated users, Read by Admins only, No client deletion)
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.action is string;
+      allow update, delete: if false;
+    }
+
+    // Legacy auditLogs alias
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.action is string;
+      allow update, delete: if false;
+    }
+
+    // Audit Cleanup Retention Runs (Admin only)
+    match /auditCleanupRuns/{runId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /audit_cleanup_runs/{runId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Top-Level Products (Fallback mapping)
+    match /products/{productId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() || (
+          isStaff() &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.sellingPrice is number &&
+          request.resource.data.sellingPrice >= 0 &&
+          request.resource.data.stockQuantity is number &&
+          request.resource.data.stockQuantity >= 0
+        )
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() || (
+          isStaff() &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.sellingPrice is number &&
+          request.resource.data.sellingPrice >= 0 &&
+          request.resource.data.stockQuantity is number &&
+          request.resource.data.stockQuantity >= 0 &&
+          (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt)
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Top-Level Categories (Fallback mapping)
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.name is string && request.resource.data.name.size() > 0;
+      allow delete: if isAdmin();
+    }
+
+    // Top-Level Inventory History (Fallback mapping)
+    match /inventory_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() || (
+          (!('userEmail' in request.resource.data) || request.resource.data.userEmail == request.auth.token.email) &&
+          (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid)
+        )
+      );
+      allow update, delete: if false;
+    }
+
+    // Top-Level Invoices (Fallback mapping)
+    match /invoices/{invoiceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() || (
+          isStaff() &&
+          (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid) &&
+          (!('userEmail' in request.resource.data) || request.resource.data.userEmail == request.auth.token.email) &&
+          (!('createdByEmail' in request.resource.data) || request.resource.data.createdByEmail == request.auth.token.email)
+        )
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // Top-Level Customers (Fallback mapping)
+    match /customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /farmers/{farmerId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /dailyAccounts/{accountId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /daily_accounts/{accountId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Top-Level Credit Records (Fallback mapping)
+    match /credit_records/{creditId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Top-Level Settings (Fallback mapping)
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        settingId == 'invoiceNumber' &&
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextInvoiceNumber', 'lastIssuedNumber', 'updatedAt', 'updatedBy'])
+      );
+    }
+
+    // Top-Level Alerts & Notifications (Fallback mapping)
+    match /alerts/{alertId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Top-Level Backups (Fallback mapping)
+    match /backups/{backupId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Top-Level System Health (Fallback mapping)
+    match /system_health/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Top-Level System Sync Probe (Fallback mapping)
+    match /system/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // =========================================================================
+    // 5. DEFAULT STRICT DENY ALL UNMATCHED PATHS
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

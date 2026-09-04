@@ -1,0 +1,6 @@
+{
+  "name": "MANGALAM FERTILIZER",
+  "description": "Production-grade Inventory & Billing management system for agricultural retailers and distributors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

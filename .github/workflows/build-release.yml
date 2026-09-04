@@ -1,0 +1,441 @@
+name: Manglam Fertilizer - Production Build & Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Target Version Name (e.g. 1.0.1)'
+        required: false
+        default: ''
+      version_code:
+        description: 'Target Version Code (e.g. 2)'
+        required: false
+        default: ''
+      release_type:
+        description: 'Release Type (OPTIONAL, RECOMMENDED, SILENT, FORCED, SECURITY_CRITICAL)'
+        required: true
+        default: 'RECOMMENDED'
+        type: choice
+        options:
+          - OPTIONAL
+          - RECOMMENDED
+          - SILENT
+          - FORCED
+          - SECURITY_CRITICAL
+      release_notes:
+        description: 'Release Notes (English changelog)'
+        required: false
+        default: '• Production release update\n• Inventory, billing, and performance optimizations\n• Stability and offline sync improvements'
+      force_after_days:
+        description: 'Grace period in days before forced update'
+        required: false
+        default: '15'
+      minimum_supported_version_code:
+        description: 'Minimum Supported Version Code'
+        required: false
+        default: '1'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  production-release:
+    name: Production Release Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 1. Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 2. Set Up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 3. Set Up Android SDK & Build Tools
+        uses: android-actions/setup-android@v3
+
+      - name: 4. Restore Gradle Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 5. Validate Source Structure & Integrity
+        run: |
+          echo "=== [STEP 1/14] Validating Project Integrity ==="
+          test -d "app" || { echo "Missing 'app' directory! Build aborted." >&2; exit 1; }
+          test -f "app/build.gradle.kts" || { echo "Missing 'app/build.gradle.kts'! Build aborted." >&2; exit 1; }
+          test -f "app/src/main/AndroidManifest.xml" || { echo "Missing 'AndroidManifest.xml'! Build aborted." >&2; exit 1; }
+          test -f "gradle/libs.versions.toml" || { echo "Missing 'libs.versions.toml'! Build aborted." >&2; exit 1; }
+          test -f "settings.gradle.kts" || { echo "Missing 'settings.gradle.kts'! Build aborted." >&2; exit 1; }
+          echo "Project structure validated."
+
+      - name: 6. Extract & Validate Version Configuration
+        id: version_check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION_NAME: ${{ github.event.inputs.version_name }}
+          INPUT_VERSION_CODE: ${{ github.event.inputs.version_code }}
+        run: |
+          echo "=== [STEP 2/14] Extracting & Validating Version Configuration ==="
+          
+          DETECTED_VNAME=$(grep -oE 'versionName[[:space:]]*=[[:space:]]*"[^"]+"' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.0.0")
+          DETECTED_VCODE=$(grep -oE 'versionCode[[:space:]]*=[[:space:]]*[0-9]+' app/build.gradle.kts | head -n1 | sed -E 's/.*=[[:space:]]*([0-9]+).*/\1/' || echo "1")
+          
+          # If triggered by a git tag (e.g. refs/tags/v1.0.1), use the tag version name
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v(.+) ]]; then
+            TAG_VNAME="${BASH_REMATCH[1]}"
+            VERSION_NAME="$TAG_VNAME"
+          else
+            VERSION_NAME="${INPUT_VERSION_NAME:-$DETECTED_VNAME}"
+          fi
+          
+          VERSION_CODE="${INPUT_VERSION_CODE:-$DETECTED_VCODE}"
+          PACKAGE_NAME="com.manglamfertilizer.app"
+          
+          if [ -z "$VERSION_NAME" ]; then
+            echo "[ERROR] Version Name cannot be empty! Build aborted." >&2
+            exit 1
+          fi
+          
+          if [ -z "$VERSION_CODE" ] || [ "$VERSION_CODE" -le 0 ]; then
+            echo "[ERROR] Invalid Version Code '$VERSION_CODE'. Must be integer > 0." >&2
+            exit 1
+          fi
+          
+          echo "Target Version Name : $VERSION_NAME"
+          echo "Target Version Code : $VERSION_CODE"
+          echo "Target Package Name : $PACKAGE_NAME"
+          
+          # Determine latest existing production release versionCode via GitHub API
+          PREV_VERSION_CODE=0
+          LATEST_RELEASE_JSON=$(gh api repos/${{ github.repository }}/releases/latest 2>/dev/null || echo "")
+          if [ -n "$LATEST_RELEASE_JSON" ]; then
+            DOWNLOAD_URL=$(echo "$LATEST_RELEASE_JSON" | grep -oE 'https://[^"]+/update.json' | head -n1 || echo "")
+            if [ -n "$DOWNLOAD_URL" ]; then
+              echo "Fetching latest published update.json from: $DOWNLOAD_URL"
+              PREV_MANIFEST=$(curl -sSL "$DOWNLOAD_URL" 2>/dev/null || echo "")
+              if [ -n "$PREV_MANIFEST" ]; then
+                EXTRACTED_CODE=$(echo "$PREV_MANIFEST" | grep -oE '"versionCode"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' || echo "0")
+                if [ -n "$EXTRACTED_CODE" ] && [ "$EXTRACTED_CODE" -gt 0 ]; then
+                  PREV_VERSION_CODE=$EXTRACTED_CODE
+                fi
+              fi
+            fi
+          fi
+          
+          echo "Previous Release Version Code: $PREV_VERSION_CODE"
+          if [ "$PREV_VERSION_CODE" -gt 0 ] && [ "$VERSION_CODE" -le "$PREV_VERSION_CODE" ]; then
+            echo "==============================================================================" >&2
+            echo "[ERROR] Version Code Monotonicity Violation!" >&2
+            echo "New versionCode ($VERSION_CODE) must be strictly greater than previous ($PREV_VERSION_CODE)." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+      - name: 7. Validate & Decode Production Keystore
+        id: keystore_setup
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "=== [STEP 3/14] Validating Production Keystore Secrets ==="
+          
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "==============================================================================" >&2
+            echo "Production release keystore is not configured. Build aborted." >&2
+            echo "==============================================================================" >&2
+            echo "Required GitHub Secrets:" >&2
+            echo "  - KEYSTORE_BASE64" >&2
+            echo "  - KEYSTORE_PASSWORD" >&2
+            echo "  - KEY_ALIAS" >&2
+            echo "  - KEY_PASSWORD" >&2
+            exit 1
+          fi
+          
+          # Decode keystore safely into temporary workspace location (excluded from git)
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          
+          if [ ! -s "$RUNNER_TEMP/release.keystore" ]; then
+            echo "[ERROR] Failed to decode production keystore or file is empty! Build aborted." >&2
+            exit 1
+          fi
+          
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+          
+          echo "Production keystore successfully configured and validated."
+
+      - name: 8. Execute Clean & Unit Tests
+        run: |
+          echo "=== [STEP 4/14] Running Unit & Consistency Tests ==="
+          chmod +x ./gradlew
+          ./gradlew clean --no-daemon
+          ./gradlew testDebugUnitTest --no-daemon
+
+      - name: 9. Compile Release APK
+        run: |
+          echo "=== [STEP 5/14] Compiling Signed Production APK ==="
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: 10. Locate, Verify & Package Release Artifacts
+        id: package_artifacts
+        env:
+          VERSION_NAME: ${{ steps.version_check.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version_check.outputs.version_code }}
+          PACKAGE_NAME: ${{ steps.version_check.outputs.package_name }}
+          RELEASE_TYPE: ${{ github.event.inputs.release_type || 'RECOMMENDED' }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes || '• Production release update\n• Inventory, billing, and performance optimizations\n• Stability and offline sync improvements' }}
+          FORCE_DAYS: ${{ github.event.inputs.force_after_days || '15' }}
+          MIN_SUPPORTED_VCODE: ${{ github.event.inputs.minimum_supported_version_code || '1' }}
+        run: |
+          echo "=== [STEP 6/14] Verifying APK Integrity & Signing Certificate ==="
+          
+          mkdir -p release
+          
+          RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
+          if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
+            echo "[ERROR] No APK output found in app/build/outputs/apk/release! Build aborted." >&2
+            exit 1
+          fi
+          
+          APK_SIZE_BYTES=$(wc -c < "$RAW_APK" | tr -d ' ')
+          if [ "$APK_SIZE_BYTES" -le 0 ]; then
+            echo "[ERROR] Built APK size is 0 bytes! Build aborted." >&2
+            exit 1
+          fi
+          
+          # Verify APK using aapt if available
+          if command -v aapt >/dev/null 2>&1; then
+            APK_PKG=$(aapt dump badging "$RAW_APK" 2>/dev/null | grep -oE "package: name='[^']+'" | cut -d"'" -f2 || true)
+            if [ -n "$APK_PKG" ] && [ "$APK_PKG" != "$PACKAGE_NAME" ]; then
+              echo "[ERROR] APK package name verification failed! Expected '$PACKAGE_NAME', found '$APK_PKG'." >&2
+              exit 1
+            fi
+            echo "Verified APK package name: $APK_PKG"
+          fi
+          
+          # Verify cryptographic signature
+          if command -v apksigner >/dev/null 2>&1; then
+            apksigner verify "$RAW_APK" || { echo "[ERROR] APK signature verification failed!" >&2; exit 1; }
+            CERT_INFO=$(apksigner verify --print-certs "$RAW_APK" 2>/dev/null || true)
+            if echo "$CERT_INFO" | grep -qi "Android Debug"; then
+              echo "[ERROR] APK is signed with Android Debug certificate! Production release aborted." >&2
+              exit 1
+            fi
+            echo "Cryptographic signature verified with production certificate."
+          fi
+          
+          FINAL_APK_NAME="ManglamFertilizer-v${VERSION_NAME}.apk"
+          FINAL_APK_PATH="release/${FINAL_APK_NAME}"
+          cp -f "$RAW_APK" "$FINAL_APK_PATH"
+          
+          # Calculate SHA-256 on FINAL APK
+          SHA256_HASH=$(sha256sum "$FINAL_APK_PATH" | awk '{print $1}')
+          echo "$SHA256_HASH  $FINAL_APK_NAME" > release/SHA256SUMS.txt
+          
+          TODAY_STR=$(date '+%Y-%m-%d')
+          APK_DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION_NAME}/${FINAL_APK_NAME}"
+          
+          # Safely generate update.json using Python
+          python3 -c '
+          import json, sys
+          data = {
+              "packageName": sys.argv[1],
+              "versionName": sys.argv[2],
+              "versionCode": int(sys.argv[3]),
+              "releaseType": sys.argv[4],
+              "releaseTitle": f"Manglam Fertilizer v{sys.argv[2]} Release",
+              "releaseNotes": sys.argv[5],
+              "releaseNotesHindi": "• नया अपडेट\n• स्टॉक व बिलिंग में सुधार\n• बेहतर परफॉरमेंस व स्थिरता",
+              "apkUrl": sys.argv[6],
+              "sha256": sys.argv[7],
+              "publishedBy": "admin.manglamferilizer@gmail.com",
+              "publishedAt": sys.argv[8],
+              "forceAfterDays": int(sys.argv[9]),
+              "minimumSupportedVersion": "1.0.0",
+              "minimumSupportedVersionCode": int(sys.argv[10])
+          }
+          with open("release/update.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+          ' "$PACKAGE_NAME" "$VERSION_NAME" "$VERSION_CODE" "$RELEASE_TYPE" "$RELEASE_NOTES" "$APK_DOWNLOAD_URL" "$SHA256_HASH" "$TODAY_STR" "$FORCE_DAYS" "$MIN_SUPPORTED_VCODE"
+          
+          # Safely generate release-metadata.json using Python
+          python3 -c '
+          import json, sys
+          data = {
+              "buildTimestamp": sys.argv[1],
+              "packageName": sys.argv[2],
+              "versionName": sys.argv[3],
+              "versionCode": int(sys.argv[4]),
+              "releaseType": sys.argv[5],
+              "apkFilename": sys.argv[6],
+              "apkSizeBytes": int(sys.argv[7]),
+              "sha256": sys.argv[8],
+              "distributionUrl": sys.argv[9],
+              "githubReleaseTag": f"v{sys.argv[3]}"
+          }
+          with open("release/release-metadata.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+          ' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$PACKAGE_NAME" "$VERSION_NAME" "$VERSION_CODE" "$RELEASE_TYPE" "$FINAL_APK_NAME" "$APK_SIZE_BYTES" "$SHA256_HASH" "$APK_DOWNLOAD_URL"
+          
+          # Verify all 4 release files exist and are non-empty
+          for art in "$FINAL_APK_PATH" "release/update.json" "release/SHA256SUMS.txt" "release/release-metadata.json"; do
+            if [ ! -s "$art" ]; then
+              echo "[ERROR] Missing or empty distribution artifact: $art" >&2
+              exit 1
+            fi
+          done
+          
+          echo "sha256=$SHA256_HASH" >> $GITHUB_OUTPUT
+          echo "apk_name=$FINAL_APK_NAME" >> $GITHUB_OUTPUT
+          echo "apk_path=$FINAL_APK_PATH" >> $GITHUB_OUTPUT
+
+      - name: 11. Publish GitHub Release with Atomic Artifact Upload
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_NAME: ${{ steps.version_check.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version_check.outputs.version_code }}
+          APK_NAME: ${{ steps.package_artifacts.outputs.apk_name }}
+          SHA256_HASH: ${{ steps.package_artifacts.outputs.sha256 }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes || '• Production release update\n• Performance optimizations and bug fixes' }}
+        run: |
+          echo "=== [STEP 7/14] Creating GitHub Release & Uploading Distribution Assets ==="
+          
+          TAG="v${VERSION_NAME}"
+          TITLE="Manglam Fertilizer v${VERSION_NAME}"
+          
+          cat <<EOF > release_notes.md
+          ## Manglam Fertilizer Production Release v${VERSION_NAME}
+          
+          ### Release Highlights:
+          ${RELEASE_NOTES}
+          
+          ### Distribution & Integrity Details:
+          - **Package**: \`com.manglamfertilizer.app\`
+          - **Version Name**: \`${VERSION_NAME}\`
+          - **Version Code**: \`${VERSION_CODE}\`
+          - **APK File**: \`${APK_NAME}\`
+          - **SHA-256 Checksum**: \`${SHA256_HASH}\`
+          
+          ### In-App Update Manifest:
+          Client applications consume \`https://github.com/${{ github.repository }}/releases/latest/download/update.json\` to verify and install this release.
+          EOF
+          
+          # Check if release tag already exists on remote, delete if re-releasing or create fresh
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release for tag $TAG..."
+            gh release upload "$TAG" \
+              "release/${APK_NAME}" \
+              "release/update.json" \
+              "release/SHA256SUMS.txt" \
+              "release/release-metadata.json" \
+              --clobber
+          else
+            echo "Creating new GitHub Release $TAG..."
+            gh release create "$TAG" \
+              "release/${APK_NAME}" \
+              "release/update.json" \
+              "release/SHA256SUMS.txt" \
+              "release/release-metadata.json" \
+              --title "$TITLE" \
+              --notes-file release_notes.md
+          fi
+          
+          echo "GitHub Release $TAG published."
+
+      - name: 12. Download & Verify Published Release Assets (End-to-End Release Audit)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_NAME: ${{ steps.version_check.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version_check.outputs.version_code }}
+          PACKAGE_NAME: ${{ steps.version_check.outputs.package_name }}
+          EXPECTED_SHA: ${{ steps.package_artifacts.outputs.sha256 }}
+          APK_NAME: ${{ steps.package_artifacts.outputs.apk_name }}
+        run: |
+          echo "=== [STEP 8/14] Auditing Published GitHub Release Assets ==="
+          
+          mkdir -p "$RUNNER_TEMP/verified_release"
+          cd "$RUNNER_TEMP/verified_release"
+          
+          TAG="v${VERSION_NAME}"
+          gh release download "$TAG" --pattern "*" --dir .
+          
+          test -f "$APK_NAME" || { echo "[AUDIT FAILED] Downloaded APK missing from release!" >&2; exit 1; }
+          test -f "update.json" || { echo "[AUDIT FAILED] Downloaded update.json missing from release!" >&2; exit 1; }
+          test -f "SHA256SUMS.txt" || { echo "[AUDIT FAILED] Downloaded SHA256SUMS.txt missing from release!" >&2; exit 1; }
+          test -f "release-metadata.json" || { echo "[AUDIT FAILED] Downloaded release-metadata.json missing from release!" >&2; exit 1; }
+          
+          # Validate update.json integrity
+          python3 -c '
+          import json, sys
+          with open("update.json", "r", encoding="utf-8") as f:
+              m = json.load(f)
+          pkg = m.get("packageName")
+          vcode = m.get("versionCode")
+          sha = m.get("sha256")
+          apk_url = m.get("apkUrl")
+          
+          assert pkg == sys.argv[1], f"Package mismatch: {pkg} != {sys.argv[1]}"
+          assert vcode == int(sys.argv[2]), f"VersionCode mismatch: {vcode} != {sys.argv[2]}"
+          assert sha == sys.argv[3], f"SHA256 mismatch in update.json: {sha} != {sys.argv[3]}"
+          print("[AUDIT OK] update.json contents strictly validated.")
+          ' "$PACKAGE_NAME" "$VERSION_CODE" "$EXPECTED_SHA"
+          
+          # Verify downloaded APK SHA-256
+          DOWNLOADED_SHA=$(sha256sum "$APK_NAME" | awk '{print $1}')
+          if [ "$DOWNLOADED_SHA" != "$EXPECTED_SHA" ]; then
+            echo "[AUDIT FAILED] Downloaded APK SHA-256 ($DOWNLOADED_SHA) does not match expected ($EXPECTED_SHA)!" >&2
+            exit 1
+          fi
+          echo "[AUDIT OK] Downloaded APK SHA-256 matches build checksum exactly."
+
+      - name: 13. Secure Cleanup of Ephemeral Keystore
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/release.keystore" ]; then
+            shred -u "$RUNNER_TEMP/release.keystore" 2>/dev/null || rm -f "$RUNNER_TEMP/release.keystore"
+            echo "Ephemeral keystore securely wiped from CI runner."
+          fi
+
+      - name: 14. Final Release Summary & Signoff
+        env:
+          VERSION_NAME: ${{ steps.version_check.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version_check.outputs.version_code }}
+          PACKAGE_NAME: ${{ steps.version_check.outputs.package_name }}
+          APK_NAME: ${{ steps.package_artifacts.outputs.apk_name }}
+          SHA256_HASH: ${{ steps.package_artifacts.outputs.sha256 }}
+        run: |
+          echo "=================================================="
+          echo "RELEASE SUCCESSFUL"
+          echo "=================================================="
+          echo "Version:        v${VERSION_NAME} (Code: ${VERSION_CODE})"
+          echo "Package:        ${PACKAGE_NAME}"
+          echo "APK:            ${APK_NAME}"
+          echo "SHA-256:        ${SHA256_HASH}"
+          echo "GitHub Release: https://github.com/${{ github.repository }}/releases/tag/v${VERSION_NAME}"
+          echo "Manifest:       https://github.com/${{ github.repository }}/releases/download/v${VERSION_NAME}/update.json"
+          echo "=================================================="
+
