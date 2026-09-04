@@ -155,19 +155,39 @@ echo ""
 # ------------------------------------------------------------------------------
 echo "[STEP 8/18] Locating compiled APK build output..."
 
-RAW_APK=""
-if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-    RAW_APK="app/build/outputs/apk/release/app-release.apk"
-elif [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
-    RAW_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-else
-    RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n1 || true)
+CANDIDATES=()
+while IFS= read -r apk_file; do
+    [ -n "$apk_file" ] && CANDIDATES+=("$apk_file")
+done < <(find app/build/outputs -type f -name "*.apk" 2>/dev/null \
+    | grep -v -i -E "debug|androidTest|test|unsigned|intermediates" \
+    | sort -u || true)
+
+if [ ${#CANDIDATES[@]} -eq 0 ] && [ -d "app/build/outputs/apk/release" ]; then
+    while IFS= read -r apk_file; do
+        [ -n "$apk_file" ] && CANDIDATES+=("$apk_file")
+    done < <(find app/build/outputs/apk/release -type f -name "*.apk" 2>/dev/null \
+        | grep -v -i -E "debug|androidTest|test|intermediates" \
+        | sort -u || true)
 fi
 
-if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
-    echo "[ERROR] No APK artifact found in app/build/outputs/apk/release! Build failed." >&2
+if [ ${#CANDIDATES[@]} -eq 0 ]; then
+    echo "[ERROR] No release APK artifact found in app/build/outputs! Build failed." >&2
+    if [ -d "app/build/outputs" ]; then
+        echo "[DIAGNOSTIC] Current build outputs:" >&2
+        ls -laR app/build/outputs >&2 || true
+    fi
     exit 1
 fi
+
+if [ ${#CANDIDATES[@]} -gt 1 ]; then
+    echo "[ERROR] Multiple release APK candidates found! Ambiguous build output:" >&2
+    for c in "${CANDIDATES[@]}"; do
+        echo "  Candidate: $c" >&2
+    done
+    exit 1
+fi
+
+RAW_APK="${CANDIDATES[0]}"
 
 echo "[OK] Located Source APK: $RAW_APK"
 echo ""

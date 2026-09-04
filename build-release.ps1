@@ -239,14 +239,23 @@ foreach ($path in $CandidatePaths) {
 }
 
 if (-not $SourceApk) {
-    $ApkFiles = Get-ChildItem -Path "app/build/outputs/apk/release" -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue
-    if ($ApkFiles.Count -gt 0) {
+    $ApkFiles = Get-ChildItem -Path "app/build/outputs" -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Where-Object {
+        $_.FullName -notmatch "debug|androidTest|test|unsigned|intermediates"
+    }
+    if ($ApkFiles.Count -eq 1) {
         $SourceApk = $ApkFiles[0].FullName
+    } elseif ($ApkFiles.Count -gt 1) {
+        Write-Error "[FATAL] Multiple release APK artifacts found in 'app/build/outputs'!"
+        $ApkFiles | ForEach-Object { Write-Host "  Candidate: $($_.FullName)" -ForegroundColor Yellow }
+        exit 1
     }
 }
 
 if (-not $SourceApk) {
-    Write-Error "[FATAL] No APK artifact found in 'app/build/outputs/apk/release'!"
+    Write-Error "[FATAL] No release APK artifact found in 'app/build/outputs'!"
+    if (Test-Path "app/build/outputs") {
+        Get-ChildItem -Path "app/build/outputs" -Recurse | Select-Object FullName | Out-String | Write-Host
+    }
     exit 1
 }
 

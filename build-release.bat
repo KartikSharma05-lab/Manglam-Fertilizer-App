@@ -214,14 +214,18 @@ if exist "app\build\outputs\apk\release\app-release.apk" (
     set RAW_APK=app\build\outputs\apk\release\app-release.apk
 ) else if exist "app\build\outputs\apk\release\app-release-unsigned.apk" (
     set RAW_APK=app\build\outputs\apk\release\app-release-unsigned.apk
-) else (
+) else if exist "app\build\outputs\apk\release" (
     for /r "app\build\outputs\apk\release" %%f in (*.apk) do (
         set RAW_APK=%%f
+    )
+) else if exist "app\build\outputs" (
+    for /r "app\build\outputs" %%f in (*.apk) do (
+        echo "%%f" | findstr /i /v "debug androidTest test unsigned intermediates" >nul && set RAW_APK=%%f
     )
 )
 
 if "%RAW_APK%"=="" (
-    echo [ERROR] Could not find any APK file in app\build\outputs\apk\release!
+    echo [ERROR] Could not find any release APK file in app\build\outputs!
     goto :BUILD_FAILED
 )
 

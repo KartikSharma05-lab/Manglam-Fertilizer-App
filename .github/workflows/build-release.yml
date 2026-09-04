@@ -214,11 +214,58 @@ jobs:
           
           mkdir -p release
           
-          RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
-          if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
-            echo "[ERROR] No APK output found in app/build/outputs/apk/release! Build aborted." >&2
+          # Diagnostic: Inspect outputs directory structure if present
+          echo "[DIAGNOSTIC] Checking build outputs under app/build/outputs:"
+          if [ -d "app/build/outputs" ]; then
+            ls -laR app/build/outputs || true
+          else
+            echo "[WARN] Directory 'app/build/outputs' does not exist!"
+          fi
+          
+          # Controlled search for built release APKs
+          CANDIDATES=()
+          while IFS= read -r apk_file; do
+            [ -n "$apk_file" ] && CANDIDATES+=("$apk_file")
+          done < <(find app/build/outputs -type f -name "*.apk" 2>/dev/null \
+            | grep -v -i -E "debug|androidTest|test|unsigned|intermediates" \
+            | sort -u || true)
+          
+          # Fallback check in standard release directory if not excluded
+          if [ ${#CANDIDATES[@]} -eq 0 ] && [ -d "app/build/outputs/apk/release" ]; then
+            while IFS= read -r apk_file; do
+              [ -n "$apk_file" ] && CANDIDATES+=("$apk_file")
+            done < <(find app/build/outputs/apk/release -type f -name "*.apk" 2>/dev/null \
+              | grep -v -i -E "debug|androidTest|test|intermediates" \
+              | sort -u || true)
+          fi
+          
+          echo "[INFO] Discovered candidate release APKs: ${#CANDIDATES[@]}"
+          for c in "${CANDIDATES[@]}"; do
+            echo "  - $c"
+          done
+          
+          if [ ${#CANDIDATES[@]} -eq 0 ]; then
+            echo "==============================================================================" >&2
+            echo "[ERROR] No release APK output found! Build aborted." >&2
+            echo "[DIAGNOSTIC] Listing full contents of app/build/outputs (if any):" >&2
+            find app/build/outputs -type f 2>/dev/null >&2 || true
+            echo "==============================================================================" >&2
             exit 1
           fi
+          
+          if [ ${#CANDIDATES[@]} -gt 1 ]; then
+            echo "==============================================================================" >&2
+            echo "[ERROR] Multiple release APK candidates found! Ambiguous build output." >&2
+            for c in "${CANDIDATES[@]}"; do
+              echo "  Candidate: $c" >&2
+            done
+            echo "Build aborted to prevent selecting the wrong artifact." >&2
+            echo "==============================================================================" >&2
+            exit 1
+          fi
+          
+          RAW_APK="${CANDIDATES[0]}"
+          echo "[OK] Selected release APK: $RAW_APK"
           
           APK_SIZE_BYTES=$(wc -c < "$RAW_APK" | tr -d ' ')
           if [ "$APK_SIZE_BYTES" -le 0 ]; then
