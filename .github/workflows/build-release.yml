@@ -81,6 +81,7 @@ jobs:
           test -f "app/src/main/AndroidManifest.xml" || { echo "Missing 'AndroidManifest.xml'! Build aborted." >&2; exit 1; }
           test -f "gradle/libs.versions.toml" || { echo "Missing 'libs.versions.toml'! Build aborted." >&2; exit 1; }
           test -f "settings.gradle.kts" || { echo "Missing 'settings.gradle.kts'! Build aborted." >&2; exit 1; }
+          test -s "app/google-services.json" || { echo "[FATAL] app/google-services.json is missing or empty! Build aborted." >&2; exit 1; }
           
           # Fail-fast validation of Gradle Wrapper integrity
           echo "[INFO] Validating Gradle wrapper integrity..."
